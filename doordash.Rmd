@@ -1,0 +1,155 @@
+---
+title: "DoorDash Analytics Assignment"
+author: "Andrew Hu"
+date: "12/14/2018"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(XLConnect)
+library(lubridate)
+library(sqldf)
+```
+
+
+## Read Data
+```{r}
+setwd('/users/andrewhu/desktop/Take home data challenge/DD Challenge')
+df=read.csv('deli.csv')
+```
+
+## Data Transformation
+```{r}
+# search: datatime format in r dataframe
+df$Customer.placed.order.datetime = as.POSIXct(df$Customer.placed.order.datetime, format="%d %H:%M:%S", tz="UTC")
+
+df$Placed.order.with.restaurant.datetime = as.POSIXct(df$Placed.order.with.restaurant.datetime, format="%d %H:%M:%S", tz="UTC")
+
+df$Driver.at.restaurant.datetime = as.POSIXct(df$Driver.at.restaurant.datetime, format="%d %H:%M:%S", tz="UTC")
+
+df$Delivered.to.consumer.datetime = as.POSIXct(df$Delivered.to.consumer.datetime, format="%d %H:%M:%S", tz="UTC")
+
+
+#change time zone
+
+df$Customer.placed.order.datetime=format(df$Customer.placed.order.datetime, tz="America/Los_Angeles",usetz=TRUE)
+
+df$Placed.order.with.restaurant.datetime=format(df$Placed.order.with.restaurant.datetimee, tz="America/Los_Angeles",usetz=TRUE)
+
+df$Driver.at.restaurant.datetime=format(df$Driver.at.restaurant.datetime, tz="America/Los_Angeles",usetz=TRUE)
+
+df$Delivered.to.consumer.datetime=format(df$Delivered.to.consumer.datetime, tz="America/Los_Angeles",usetz=TRUE)
+
+
+
+# search: POSIXct get hour for customer placed time
+# reference:
+# https://stackoverflow.com/questions/10705328/extract-hours-and-seconds-from-posixct-for-plotting-purposes-in-r
+
+df$Customer.placed.order.hour = hour(df$Customer.placed.order.datetime)
+
+# search: create new column ifelse condition dplyr in r
+# reference
+# https://stackoverflow.com/questions/24459752/can-dplyr-package-be-used-for-conditional-mutating
+df = mutate(df,time_frame=ifelse(Customer.placed.order.hour %in% c(22,23,0,1,2,3,4), "late_night_supper", 
+  ifelse(Customer.placed.order.hour %in% 5:10, "morning",
+  ifelse(Customer.placed.order.hour %in% 11:12, "lunch",
+  ifelse(Customer.placed.order.hour %in% 13:16, "afternoon",
+  ifelse(Customer.placed.order.hour %in% 17:21, "dinner", "F"))))))                                          
+# check how many restaurant in each type -> put it in the slide
+table(df$time_frame)
+
+#numbers of orders by each region and time_frame
+
+sqldf('SELECT COUNT(*) AS Numbers_of_orders, "Delivery.Region", "time_frame"
+FROM df
+GROUP BY "Delivery.Region", "time_frame"')
+```
+
+## Customer Retention
+
+### Count
+```{r}
+customer_count = df %>% group_by(Consumer.ID) %>% summarise(count =n()) 
+View(data.frame(table(customer_count$count)))
+```
+
+```{r}
+table(customer_count$count)
+```
+
+
+
+
+### Market Basket Analysis
+Reference
+* http://www.salemmarafi.com/code/market-basket-analysis-with-r/
+```{r}
+library(arules)
+library(arulesViz)
+```
+
+
+> Reformat Data and statistics
+
+```{r}
+### creating transactions form a list
+split_tibble <- function(tibble, column = 'col') {
+  tibble %>% split(., .[,column]) %>% lapply(., function(x) x[,setdiff(names(x),column)])
+}
+
+###
+df2 = unique(df %>% select(Consumer.ID, Restaurant.ID))
+dflist <- split_tibble(df2, 'Consumer.ID')
+
+## coerce into transactions
+trans1 <- as(dflist, "transactions")
+
+## analyze transactions
+summary(trans1)
+itemFrequencyPlot(trans1,topN=20,type="absolute")
+# inspect(trans1)
+```
+
+> Run Market Basket Analysis
+
+```{r}
+rules <- apriori(trans1, parameter = list(supp = 0.002, conf = 0.2, maxlen=2)) 
+rules<-sort(rules, decreasing=TRUE,by="confidence") 
+
+# Show the top 5 rules, but only 2 digits
+options(digits=2)
+View(inspect(rules))
+```
+
+> Visual Result
+
+```{r}
+plot(rules, method="graph", measure = "confidence", shading = NA) #,interactive=TRUE,shading=NA
+```
+
+> Market Potential
+
+```{r}
+library(stringr)
+
+single_id = customer_count %>% filter(count==1) #extract one-time customer
+single_records = df %>% filter(Consumer.ID %in% single_id$Consumer.ID)
+single_records_restaurant = data.frame(table(single_records$Restaurant.ID))
+
+single_records_restaurant
+rules_df = data.frame(inspect(rules))
+
+###
+lhs_restaurant_list = as.numeric(substring(levels(rules_df$lhs),2, str_length(levels(rules_df$lhs))-1))
+###
+
+
+single_records_have_recommend = single_records %>% filter(Restaurant.ID %in% lhs_restaurant_list)
+
+dim(single_records_have_recommend)[1]/dim(single_records)[1]
+```
+
+
+
